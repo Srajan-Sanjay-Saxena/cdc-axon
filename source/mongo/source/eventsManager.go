@@ -3,12 +3,12 @@ package source
 import (
 	"context"
 	"encoding/json"
-	"log"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/stream"
 	"go.mongodb.org/mongo-driver/bson"
 )
+
 func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, error) {
 	var resumeToken bson.Raw
 	if s.store != nil {
@@ -33,7 +33,7 @@ func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Even
 		for cs.Next(ctx) {
 			var raw stream.ChangeEvent
 			if err := cs.Decode(&raw); err != nil {
-				log.Printf("mongo source: decode error: %v", err)
+				s.log.Error("mongo source: decode error", "error", err)
 				continue
 			}
 
@@ -49,13 +49,12 @@ func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Even
 		}
 
 		if err := cs.Err(); err != nil && ctx.Err() == nil {
-			log.Printf("mongo source: change stream error: %v", err)
+			s.log.Error("mongo source: change stream error", "error", err)
 		}
 	}()
 
 	return ch, nil
 }
-
 
 func (s *MongoRelaySource) Ack(ctx context.Context) error {
 	if s.store == nil || s.cs == nil {

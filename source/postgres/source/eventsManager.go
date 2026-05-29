@@ -2,7 +2,6 @@ package source
 
 import (
 	"context"
-	"log"
 	"time"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
@@ -31,13 +30,13 @@ func (r *PgRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, 
 				if ctx.Err() != nil {
 					return
 				}
-				log.Printf("postgres source: receive error: %v", err)
+				r.log.Error("postgres source: receive error", "error", err)
 				return
 			}
 
 			result, err := r.walHandler.HandleMessage(ctx, msg)
 			if err != nil {
-				log.Printf("postgres source: handle error: %v", err)
+				r.log.Error("postgres source: handle error", "error", err)
 				return
 			}
 

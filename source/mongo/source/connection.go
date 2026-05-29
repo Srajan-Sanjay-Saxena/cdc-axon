@@ -3,15 +3,13 @@ package source
 import (
 	"context"
 	"fmt"
-	"log"
 
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-
 func (s *MongoRelaySource) DBConnect(ctx context.Context) error {
-	log.Println("Connecting to MongoDB...")
+	s.log.Debug("mongo source: connecting", "uri", s.cfg.URI)
 
 	if s.cfg.URI == "" {
 		return fmt.Errorf("mongo source: missing URI in config")
@@ -23,15 +21,14 @@ func (s *MongoRelaySource) DBConnect(ctx context.Context) error {
 	}
 	s.mongoClient = mongoClient
 	s.collection = mongoClient.Database(s.cfg.Database).Collection(s.cfg.CollectionName)
-	log.Println("Connected to MongoDB.....")
+	s.log.Info("mongo source: connected", "db", s.cfg.Database, "collection", s.cfg.CollectionName)
 
 	return nil
 }
 
-
 func (s *MongoRelaySource) Close(ctx context.Context) error {
 	if err := s.mongoClient.Disconnect(ctx); err != nil {
-		log.Printf("Failed to disconnect from MongoDB: %v", err)
+		s.log.Error("mongo source: disconnect error", "error", err)
 		return err
 	}
 	return nil

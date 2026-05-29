@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/logger"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
 	walhandler "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/walHandlers"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -14,13 +15,20 @@ type PgRelaySource struct {
 	pgConn     *pgconn.PgConn
 	walHandler *walhandler.WalHandlers
 	producers  []engine_source.Producer
+	log        *logger.Logger
 }
 
 func NewSource(cfg *config.PgRelaySourceConfig) *PgRelaySource {
 	return &PgRelaySource{
 		walHandler: walhandler.NewWalHandlers(),
 		cfg:        cfg,
+		log:        logger.Default(),
 	}
+}
+
+func (s *PgRelaySource) SetLogger(l *logger.Logger) *PgRelaySource {
+	s.log = l
+	return s
 }
 
 func (s *PgRelaySource) AddPersistanceStore(store engine_source.PersistenceStore) *PgRelaySource {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
@@ -19,14 +18,14 @@ func (r *PgRelaySource) DBConnect(ctx context.Context) error {
 	}
 	cfg.RuntimeParams["replication"] = "database"
 
-	log.Printf("postgres source: connecting to host=%s port=%d db=%s", cfg.Host, cfg.Port, cfg.Database)
+	r.log.Debug("postgres source: connecting", "host", cfg.Host, "port", cfg.Port, "db", cfg.Database)
 
 	conn, err := pgconn.ConnectConfig(ctx, cfg)
 	if err != nil {
 		return err
 	}
 	r.pgConn = conn
-	log.Println("postgres source: connected")
+	r.log.Info("postgres source: connected")
 
 	if err := r.ensureSlot(ctx); err != nil {
 		return err
@@ -52,12 +51,12 @@ func (r *PgRelaySource) ensureSlot(ctx context.Context) error {
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "42710" {
-			log.Println("postgres source: slot already exists, continuing")
+			r.log.Debug("postgres source: slot already exists, continuing")
 			return nil
 		}
 		return err
 	}
-	log.Println("postgres source: slot created")
+	r.log.Info("postgres source: slot created", "slot", r.cfg.SlotName)
 	return nil
 }
 
@@ -73,12 +72,12 @@ func (r *PgRelaySource) startReplication(ctx context.Context) error {
 			},
 		)
 		if err == nil {
-			log.Println("postgres source: replication started")
+			r.log.Info("postgres source: replication started")
 			return nil
 		}
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "55006" {
-			log.Printf("postgres source: slot still active, retrying in 3s... (%d/10)", i+1)
+			r.log.Warn("postgres source: slot still active, retrying", "attempt", i+1)
 			time.Sleep(3 * time.Second)
 			continue
 		}

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/logger"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/config"
 	"go.mongodb.org/mongo-driver/mongo"
 )
@@ -17,10 +18,19 @@ type MongoRelaySource struct {
 	store       engine_source.PersistenceStore
 	producers   []engine_source.Producer
 	cs          *mongo.ChangeStream
+	log         *logger.Logger
 }
 
 func NewSource(cfg *config.MongoRelaySourceConfig) *MongoRelaySource {
-	return &MongoRelaySource{cfg: cfg}
+	return &MongoRelaySource{
+		cfg: cfg,
+		log: logger.Default(),
+	}
+}
+
+func (s *MongoRelaySource) SetLogger(l *logger.Logger) *MongoRelaySource {
+	s.log = l
+	return s
 }
 
 func (s *MongoRelaySource) AddPersistanceStore(store engine_source.PersistenceStore) *MongoRelaySource {
