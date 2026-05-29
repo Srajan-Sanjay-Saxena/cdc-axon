@@ -7,7 +7,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/source/postgres/config"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgconn"
 )

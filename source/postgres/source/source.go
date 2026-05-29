@@ -3,9 +3,9 @@ package source
 import (
 	"fmt"
 
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/engine_source"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/source/postgres/config"
-	walhandler "github.com/Srajan-Sanjay-Saxena/cdcrelay/source/postgres/walHandlers"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
+	walhandler "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/walHandlers"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

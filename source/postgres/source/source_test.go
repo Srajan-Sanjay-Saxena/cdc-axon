@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/event"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/source/postgres/config"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
 	"github.com/jackc/pglogrepl"
 )
 

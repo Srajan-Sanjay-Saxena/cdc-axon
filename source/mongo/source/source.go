@@ -1,10 +1,11 @@
 package source
 
 import (
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/engine_source"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/source/mongo/config"
-	"go.mongodb.org/mongo-driver/mongo"
 	"fmt"
+
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/config"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 const resumeTokenKey = "mongo:resume_token"

@@ -2,14 +2,15 @@ package walhandler
 
 import (
 	"context"
-	"errors"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/event"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/engine_source"
-	"github.com/jackc/pglogrepl"
-	"github.com/jackc/pgx/v5/pgconn"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
+
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
+	"github.com/jackc/pglogrepl"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
 

@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/event"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/source/mongo/stream"
+
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/stream"
 	"go.mongodb.org/mongo-driver/bson"
 )
 func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, error) {

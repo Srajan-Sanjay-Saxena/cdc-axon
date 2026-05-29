@@ -1,4 +1,4 @@
-module github.com/Srajan-Sanjay-Saxena/cdcrelay
+module github.com/Srajan-Sanjay-Saxena/cdc-axon
 
 go 1.25.0
 

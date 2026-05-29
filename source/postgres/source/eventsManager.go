@@ -5,7 +5,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/event"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 

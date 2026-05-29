@@ -2,7 +2,8 @@ package engine_source
 
 import (
 	"context"
-	"github.com/Srajan-Sanjay-Saxena/cdcrelay/engine/event"
+
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 )
 
 type EngineSource interface {
