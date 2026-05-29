@@ -33,22 +33,42 @@ func TestAddProducer(t *testing.T) {
 
 	s.AddProducer(mock)
 
-	prod, err := s.GetProducer()
+	prods, err := s.GetProducers()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if prod != mock {
+	if len(prods) != 1 {
+		t.Errorf("expected 1 producer, got %d", len(prods))
+	}
+	if prods[0] != mock {
 		t.Error("expected producer to be set")
 	}
 }
 
-func TestGetProducer_NotInitialized(t *testing.T) {
+func TestAddMultipleProducers(t *testing.T) {
+	cfg := &config.PgRelaySourceConfig{}
+	s := NewSource(cfg)
+	mock1 := &MockProducer{}
+	mock2 := &MockProducer{}
+
+	s.AddProducer(mock1).AddProducer(mock2)
+
+	prods, err := s.GetProducers()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(prods) != 2 {
+		t.Errorf("expected 2 producers, got %d", len(prods))
+	}
+}
+
+func TestGetProducers_NotInitialized(t *testing.T) {
 	cfg := &config.PgRelaySourceConfig{}
 	s := NewSource(cfg)
 
-	_, err := s.GetProducer()
+	_, err := s.GetProducers()
 	if err == nil {
-		t.Error("expected error when producer not initialized")
+		t.Error("expected error when no producers initialized")
 	}
 }
 
