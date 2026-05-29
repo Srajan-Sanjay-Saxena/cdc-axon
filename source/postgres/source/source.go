@@ -10,16 +10,16 @@ import (
 )
 
 type PgRelaySource struct {
-	cfg		*config.PgRelaySourceConfig
-	pgConn       *pgconn.PgConn
+	cfg        *config.PgRelaySourceConfig
+	pgConn     *pgconn.PgConn
 	walHandler *walhandler.WalHandlers
-	producer  engine_source.Producer
+	producers  []engine_source.Producer
 }
 
 func NewSource(cfg *config.PgRelaySourceConfig) *PgRelaySource {
 	return &PgRelaySource{
 		walHandler: walhandler.NewWalHandlers(),
-		cfg: cfg,
+		cfg:        cfg,
 	}
 }
 
@@ -29,13 +29,13 @@ func (s *PgRelaySource) AddPersistanceStore(store engine_source.PersistenceStore
 }
 
 func (s *PgRelaySource) AddProducer(producer engine_source.Producer) *PgRelaySource {
-	s.producer = producer
+	s.producers = append(s.producers, producer)
 	return s
 }
 
-func (s *PgRelaySource) GetProducer() (engine_source.Producer, error) {
-	if s.producer == nil {
-		return nil, fmt.Errorf("producer not initialized")
+func (s *PgRelaySource) GetProducers() ([]engine_source.Producer, error) {
+	if len(s.producers) == 0 {
+		return nil, fmt.Errorf("no producers initialized")
 	}
-	return s.producer, nil
+	return s.producers, nil
 }
