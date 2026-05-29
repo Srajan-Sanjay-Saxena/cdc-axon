@@ -61,6 +61,17 @@ func (e *Engine) run(ctx context.Context) error {
 		return fmt.Errorf("get producers: %w", err)
 	}
 
+	for _, p := range producers {
+		if err := p.Connect(ctx); err != nil {
+			return fmt.Errorf("producer connect: %w", err)
+		}
+	}
+	defer func() {
+		for _, p := range producers {
+			p.Close()
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
