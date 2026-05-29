@@ -11,12 +11,12 @@ import (
 const resumeTokenKey = "mongo:resume_token"
 
 type MongoRelaySource struct {
-	cfg        *config.MongoRelaySourceConfig
-	mongoClient     *mongo.Client
-	collection *mongo.Collection
-	store      engine_source.PersistenceStore
-	producer   engine_source.Producer
-	cs         *mongo.ChangeStream
+	cfg         *config.MongoRelaySourceConfig
+	mongoClient *mongo.Client
+	collection  *mongo.Collection
+	store       engine_source.PersistenceStore
+	producers   []engine_source.Producer
+	cs          *mongo.ChangeStream
 }
 
 func NewSource(cfg *config.MongoRelaySourceConfig) *MongoRelaySource {
@@ -29,13 +29,13 @@ func (s *MongoRelaySource) AddPersistanceStore(store engine_source.PersistenceSt
 }
 
 func (s *MongoRelaySource) AddProducer(producer engine_source.Producer) *MongoRelaySource {
-	s.producer = producer
+	s.producers = append(s.producers, producer)
 	return s
 }
 
-func (s *MongoRelaySource) GetProducer() (engine_source.Producer, error) {
-	if s.producer == nil {
-		return nil, fmt.Errorf("producer not initialized")
+func (s *MongoRelaySource) GetProducers() ([]engine_source.Producer, error) {
+	if len(s.producers) == 0 {
+		return nil, fmt.Errorf("no producers initialized")
 	}
-	return s.producer, nil
+	return s.producers, nil
 }
