@@ -11,7 +11,7 @@ type EngineSource interface {
 	CaptureEvents(ctx context.Context) (<-chan event.Event, error)
 	Ack(ctx context.Context) error
 	Close(ctx context.Context) error
-	GetProducer() (Producer, error)
+	GetProducers() ([]Producer, error)
 }
 
 type Producer interface {
