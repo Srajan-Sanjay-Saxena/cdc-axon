@@ -158,10 +158,6 @@ func TestPgSource_EndToEnd(t *testing.T) {
 	}
 
 	prod := &rabbitProducer{url: amqpURL}
-	if err := prod.Connect(ctx); err != nil {
-		t.Fatalf("producer connect failed: %v", err)
-	}
-	defer prod.Close()
 
 	cfg := &config.PgRelaySourceConfig{
 		URL:             connStr,
@@ -372,10 +368,6 @@ func TestPgSource_EndToEnd_WithRedisPersistence(t *testing.T) {
 	store := &redisStore{client: rdb}
 
 	prod := &rabbitProducer{url: amqpURL}
-	if err := prod.Connect(ctx); err != nil {
-		t.Fatalf("producer connect failed: %v", err)
-	}
-	defer prod.Close()
 
 	cfg := &config.PgRelaySourceConfig{
 		URL:             connStr,

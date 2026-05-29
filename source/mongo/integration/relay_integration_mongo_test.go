@@ -128,10 +128,6 @@ func TestMongoSource_EndToEnd(t *testing.T) {
 	amqpURL := startRabbitMQ(t, ctx)
 
 	prod := &rabbitProducer{url: amqpURL}
-	if err := prod.Connect(ctx); err != nil {
-		t.Fatalf("producer connect failed: %v", err)
-	}
-	defer prod.Close()
 
 	cfg := &mongoConfig.MongoRelaySourceConfig{
 		URI:            uri,
@@ -205,10 +201,6 @@ func TestMongoSource_EndToEnd_WithRedisPersistence(t *testing.T) {
 	rdb := startRedis(t, ctx)
 
 	prod := &rabbitProducer{url: amqpURL}
-	if err := prod.Connect(ctx); err != nil {
-		t.Fatalf("producer connect failed: %v", err)
-	}
-	defer prod.Close()
 
 	store := &redisStore{client: rdb}
 

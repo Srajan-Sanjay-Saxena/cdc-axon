@@ -148,17 +148,9 @@ func TestEngine_PgAndMongo_Simultaneous(t *testing.T) {
 
 	// pg producer
 	pgProd := &rabbitProducer{url: amqpURL, queue: "pg_events"}
-	if err := pgProd.Connect(ctx); err != nil {
-		t.Fatalf("pg producer connect failed: %v", err)
-	}
-	defer pgProd.Close()
 
 	// mongo producer
 	mongoProd := &rabbitProducer{url: amqpURL, queue: "mongo_events"}
-	if err := mongoProd.Connect(ctx); err != nil {
-		t.Fatalf("mongo producer connect failed: %v", err)
-	}
-	defer mongoProd.Close()
 
 	// start pg engine
 	pgSrc := pgSource.NewSource(&pgConfig.PgRelaySourceConfig{
