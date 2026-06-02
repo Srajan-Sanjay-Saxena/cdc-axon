@@ -22,6 +22,7 @@ No polling. No triggers. No expensive enterprise tooling.
 
 ## Features
 
+- **Full DML capture** — INSERT, UPDATE, and DELETE events captured from PostgreSQL WAL
 - **PostgreSQL WAL** — logical replication via `pgoutput`, no triggers, no polling
 - **MongoDB Change Streams** — oplog-based, resume token persistence across restarts
 - **At-least-once delivery** — LSN/resume token only advances after successful publish
@@ -261,12 +262,16 @@ func (s *RedisStore) Keys(ctx context.Context, pattern string) ([]string, error)
 CREATE TABLE outbox (
     id          TEXT PRIMARY KEY,
     event_type  TEXT NOT NULL,
-    operation   TEXT NOT NULL,  -- insert, update, delete
     payload     JSONB
 );
 
+-- Required for full row data on DELETE events
+ALTER TABLE outbox REPLICA IDENTITY FULL;
+
 CREATE PUBLICATION mypub FOR TABLE outbox;
 ```
+
+> **Note:** Without `REPLICA IDENTITY FULL`, DELETE events will only contain primary key columns. If you need the full row payload on deletes, set replica identity to FULL.
 
 ### MongoDB
 ```json
