@@ -10,40 +10,29 @@ import (
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 )
 
-// mockStore — in-memory PersistenceStore for testing
-type mockStore struct {
+// mockDeduplicationStore — in-memory DeduplicationStore for testing
+type mockDeduplicationStore struct {
 	data map[string][]byte
 }
 
-func newMockStore() *mockStore {
-	return &mockStore{data: make(map[string][]byte)}
+func newMockDeduplicationStore() *mockDeduplicationStore {
+	return &mockDeduplicationStore{data: make(map[string][]byte)}
 }
 
-func (m *mockStore) Connect(_ context.Context) error              { return nil }
-func (m *mockStore) CloseStoreConnection(_ context.Context) error { return nil }
-
-func (m *mockStore) Save(_ context.Context, key string, value []byte) error {
+func (m *mockDeduplicationStore) SaveWithTTL(_ context.Context, key string, value []byte, _ time.Duration) error {
 	m.data[key] = value
 	return nil
 }
 
-func (m *mockStore) Load(_ context.Context, key string) ([]byte, error) {
-	v, ok := m.data[key]
-	if !ok {
-		return nil, nil
-	}
-	return v, nil
-}
-
-func (m *mockStore) Delete(_ context.Context, key string) error {
-	delete(m.data, key)
-	return nil
+func (m *mockDeduplicationStore) Exists(_ context.Context, key string) (bool, error) {
+	_, ok := m.data[key]
+	return ok, nil
 }
 
 // --- Deduplicate Tests ---
 
 func TestDeduplicate_FirstEventPasses(t *testing.T) {
-	store := newMockStore()
+	store := newMockDeduplicationStore()
 	dedup := Deduplicate(store, 1*time.Hour)
 	ctx := context.Background()
 
@@ -62,7 +51,7 @@ func TestDeduplicate_FirstEventPasses(t *testing.T) {
 }
 
 func TestDeduplicate_DuplicateDropped(t *testing.T) {
-	store := newMockStore()
+	store := newMockDeduplicationStore()
 	dedup := Deduplicate(store, 1*time.Hour)
 	ctx := context.Background()
 
@@ -84,34 +73,8 @@ func TestDeduplicate_DuplicateDropped(t *testing.T) {
 	}
 }
 
-func TestDeduplicate_ExpiredTTLPassesAgain(t *testing.T) {
-	store := newMockStore()
-	dedup := Deduplicate(store, 50*time.Millisecond)
-	ctx := context.Background()
-
-	e := event.Event{ID: "evt-1", EventType: "ORDER_CREATED"}
-
-	// first call — passes
-	_, keep, _ := dedup(ctx, e)
-	if !keep {
-		t.Fatal("first event should pass")
-	}
-
-	// wait for TTL to expire
-	time.Sleep(60 * time.Millisecond)
-
-	// same ID but TTL expired — should pass again
-	_, keep, err := dedup(ctx, e)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !keep {
-		t.Error("expected event to pass after TTL expiry")
-	}
-}
-
 func TestDeduplicate_DifferentIDsBothPass(t *testing.T) {
-	store := newMockStore()
+	store := newMockDeduplicationStore()
 	dedup := Deduplicate(store, 1*time.Hour)
 	ctx := context.Background()
 
