@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 	"github.com/jackc/pglogrepl"
 	"github.com/jackc/pgx/v5/pgproto3"
 )
@@ -85,14 +86,11 @@ func TestHandleKeepalive_NoReplyWhenNotRequested(t *testing.T) {
 	}
 }
 
-func TestBuildEvent_MissingRelation(t *testing.T) {
+func TestBuildEventFromTuple_MissingRelation(t *testing.T) {
 	wh := NewWalHandlers()
 
-	msg := &pglogrepl.InsertMessage{
-		RelationID: 999,
-	}
-
-	_, err := wh.buildEvent(msg)
+	tuple := &pglogrepl.TupleData{}
+	_, err := wh.buildEventFromTuple(999, tuple, event.INSERT)
 	if err == nil {
 		t.Error("expected error for missing relation")
 	}
@@ -101,7 +99,20 @@ func TestBuildEvent_MissingRelation(t *testing.T) {
 	}
 }
 
-func TestBuildEvent_Success(t *testing.T) {
+func TestBuildEventFromTuple_NilTuple(t *testing.T) {
+	wh := NewWalHandlers()
+	wh.relations[1] = &pglogrepl.RelationMessage{RelationID: 1}
+
+	_, err := wh.buildEventFromTuple(1, nil, event.DELETE)
+	if err == nil {
+		t.Error("expected error for nil tuple")
+	}
+	if err.Error() != "tuple data is nil" {
+		t.Errorf("unexpected error message: %v", err)
+	}
+}
+
+func TestBuildEventFromTuple_Insert(t *testing.T) {
 	wh := NewWalHandlers()
 
 	wh.relations[1] = &pglogrepl.RelationMessage{
@@ -110,30 +121,28 @@ func TestBuildEvent_Success(t *testing.T) {
 		Columns: []*pglogrepl.RelationMessageColumn{
 			{Name: "id"},
 			{Name: "event_type"},
-			{Name: "operation"},
 			{Name: "payload"},
 		},
 	}
 
-	msg := &pglogrepl.InsertMessage{
-		RelationID: 1,
-		Tuple: &pglogrepl.TupleData{
-			Columns: []*pglogrepl.TupleDataColumn{
-				{Data: []byte("test-1")},
-				{Data: []byte("ORDER_CREATED")},
-				{Data: []byte("insert")},
-				{Data: []byte(`{"orderId": 123}`)},
-			},
+	tuple := &pglogrepl.TupleData{
+		Columns: []*pglogrepl.TupleDataColumn{
+			{Data: []byte("test-1")},
+			{Data: []byte("ORDER_CREATED")},
+			{Data: []byte(`{"orderId": 123}`)},
 		},
 	}
 
-	ev, err := wh.buildEvent(msg)
+	ev, err := wh.buildEventFromTuple(1, tuple, event.INSERT)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	if ev.Source != "outbox" {
 		t.Errorf("expected Source=outbox, got %s", ev.Source)
+	}
+	if ev.Operation != event.INSERT {
+		t.Errorf("expected Operation=insert, got %s", ev.Operation)
 	}
 	if ev.EventType != "ORDER_CREATED" {
 		t.Errorf("expected EventType=ORDER_CREATED, got %s", ev.EventType)
@@ -143,7 +152,75 @@ func TestBuildEvent_Success(t *testing.T) {
 	}
 }
 
-func TestBuildEvent_NoPayloadColumn(t *testing.T) {
+func TestBuildEventFromTuple_Update(t *testing.T) {
+	wh := NewWalHandlers()
+
+	wh.relations[1] = &pglogrepl.RelationMessage{
+		RelationID:   1,
+		RelationName: "outbox",
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "id"},
+			{Name: "event_type"},
+			{Name: "payload"},
+		},
+	}
+
+	tuple := &pglogrepl.TupleData{
+		Columns: []*pglogrepl.TupleDataColumn{
+			{Data: []byte("test-1")},
+			{Data: []byte("ORDER_UPDATED")},
+			{Data: []byte(`{"orderId": 123, "status": "shipped"}`)},
+		},
+	}
+
+	ev, err := wh.buildEventFromTuple(1, tuple, event.UPDATE)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ev.Operation != event.UPDATE {
+		t.Errorf("expected Operation=update, got %s", ev.Operation)
+	}
+	if ev.EventType != "ORDER_UPDATED" {
+		t.Errorf("expected EventType=ORDER_UPDATED, got %s", ev.EventType)
+	}
+}
+
+func TestBuildEventFromTuple_Delete(t *testing.T) {
+	wh := NewWalHandlers()
+
+	wh.relations[1] = &pglogrepl.RelationMessage{
+		RelationID:   1,
+		RelationName: "outbox",
+		Columns: []*pglogrepl.RelationMessageColumn{
+			{Name: "id"},
+			{Name: "event_type"},
+			{Name: "payload"},
+		},
+	}
+
+	tuple := &pglogrepl.TupleData{
+		Columns: []*pglogrepl.TupleDataColumn{
+			{Data: []byte("test-1")},
+			{Data: []byte("ORDER_DELETED")},
+			{Data: []byte(`{"orderId": 123}`)},
+		},
+	}
+
+	ev, err := wh.buildEventFromTuple(1, tuple, event.DELETE)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if ev.Operation != event.DELETE {
+		t.Errorf("expected Operation=delete, got %s", ev.Operation)
+	}
+	if ev.EventType != "ORDER_DELETED" {
+		t.Errorf("expected EventType=ORDER_DELETED, got %s", ev.EventType)
+	}
+}
+
+func TestBuildEventFromTuple_NoPayloadColumn(t *testing.T) {
 	wh := NewWalHandlers()
 
 	wh.relations[1] = &pglogrepl.RelationMessage{
@@ -155,17 +232,14 @@ func TestBuildEvent_NoPayloadColumn(t *testing.T) {
 		},
 	}
 
-	msg := &pglogrepl.InsertMessage{
-		RelationID: 1,
-		Tuple: &pglogrepl.TupleData{
-			Columns: []*pglogrepl.TupleDataColumn{
-				{Data: []byte("test-1")},
-				{Data: []byte("ORDER_CREATED")},
-			},
+	tuple := &pglogrepl.TupleData{
+		Columns: []*pglogrepl.TupleDataColumn{
+			{Data: []byte("test-1")},
+			{Data: []byte("ORDER_CREATED")},
 		},
 	}
 
-	ev, err := wh.buildEvent(msg)
+	ev, err := wh.buildEventFromTuple(1, tuple, event.INSERT)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

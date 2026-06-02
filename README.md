@@ -22,6 +22,7 @@ No polling. No triggers. No expensive enterprise tooling.
 
 ## Features
 
+- **Full DML capture** — INSERT, UPDATE, and DELETE events captured from PostgreSQL WAL
 - **PostgreSQL WAL** — logical replication via `pgoutput`, no triggers, no polling
 - **MongoDB Change Streams** — oplog-based, resume token persistence across restarts
 - **At-least-once delivery** — LSN/resume token only advances after successful publish
@@ -34,32 +35,6 @@ No polling. No triggers. No expensive enterprise tooling.
 - **Exponential backoff** — automatic retry with configurable backoff on failures
 - **Clean interfaces** — engine, source, producer, and persistence are fully decoupled
 
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        CDC-Axon Engine                       │
-│                                                              │
-│   EngineSource              Producers (concurrent)           │
-│   ┌──────────┐             ┌──────────┐  ┌──────────┐       │
-│   │ DBConnect│             │ Producer │  │ Producer │  ...  │
-│   │ Capture  │──event──┬──▶│ Publish  │  │ Publish  │       │
-│   │ Events   │         │   └──────────┘  └──────────┘       │
-│   │ Ack      │         │   (goroutine)   (goroutine)         │
-│   │ Close    │         └── WaitGroup — Ack after all done    │
-│   └──────────┘                                               │
-│        │                                                     │
-│   PersistenceStore                                           │
-│   ┌──────────┐                                               │
-│   │ Save     │  (relation metadata / resume token)           │
-│   │ Load     │                                               │
-│   │ Delete   │                                               │
-│   │ Keys     │                                               │
-│   └──────────┘                                               │
-└─────────────────────────────────────────────────────────────┘
-```
 
 ---
 
@@ -261,12 +236,16 @@ func (s *RedisStore) Keys(ctx context.Context, pattern string) ([]string, error)
 CREATE TABLE outbox (
     id          TEXT PRIMARY KEY,
     event_type  TEXT NOT NULL,
-    operation   TEXT NOT NULL,  -- insert, update, delete
     payload     JSONB
 );
 
+-- Required for full row data on DELETE events
+ALTER TABLE outbox REPLICA IDENTITY FULL;
+
 CREATE PUBLICATION mypub FOR TABLE outbox;
 ```
+
+> **Note:** Without `REPLICA IDENTITY FULL`, DELETE events will only contain primary key columns. If you need the full row payload on deletes, set replica identity to FULL.
 
 ### MongoDB
 ```json
@@ -295,51 +274,7 @@ type Event struct {
 
 This means your `Producer` implementation receives the same `Event` shape whether the source is Postgres or MongoDB — making it trivial to build broker-agnostic consumers.
 
----
 
-## How At-Least-Once Delivery Works
-
-```
-CaptureEvents goroutine
-    │
-    ├── WAL/oplog event received
-    ├── event sent to channel
-    │
-Engine loop
-    ├── receives event from channel
-    ├── publishAll(producers) — all producers publish concurrently
-    │       ├── goroutine → Producer1.Publish()
-    │       ├── goroutine → Producer2.Publish()
-    │       └── WaitGroup.Wait() — blocks until ALL succeed
-    │
-    ├── ALL succeeded → Ack()
-    │       ├── Postgres: SendStandbyStatusUpdate → LSN advances
-    │       └── Mongo: save resume token to Redis
-    │
-    └── ANY failed → return error → engine retries with backoff
-                     LSN/token NOT advanced → DB resends event
-```
-
----
-
-## Project Structure
-
-```
-cdc-axon/
-├── engine/
-│   ├── core/           # Engine — orchestration, backoff, retry, concurrent publish
-│   ├── engine_source/  # Contracts — EngineSource, Producer, PersistenceStore
-│   └── event/          # Event struct and OperationType
-└── source/
-    ├── postgres/
-    │   ├── config/     # PgRelaySourceConfig
-    │   ├── source/     # PgRelaySource — DBConnect, CaptureEvents, Ack
-    │   └── walHandlers/# WAL message parsing, relation persistence
-    └── mongo/
-        ├── config/     # MongoRelaySourceConfig
-        ├── source/     # MongoRelaySource — DBConnect, CaptureEvents, Ack
-        └── stream/     # Change stream opening
-```
 
 ---
 

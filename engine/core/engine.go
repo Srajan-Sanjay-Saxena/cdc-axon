@@ -13,9 +13,10 @@ import (
 )
 
 type Engine struct {
-	source  engine_source.EngineSource
-	backoff *backoff.Backoff
-	log     *logger.Logger
+	source     engine_source.EngineSource
+	backoff    *backoff.Backoff
+	log        *logger.Logger
+	transforms []engine_source.Transform
 }
 
 func New(src engine_source.EngineSource) *Engine {
@@ -28,6 +29,11 @@ func New(src engine_source.EngineSource) *Engine {
 
 func (e *Engine) SetLogger(l *logger.Logger) *Engine {
 	e.log = l
+	return e
+}
+
+func (e *Engine) AddTransform(t engine_source.Transform) *Engine {
+	e.transforms = append(e.transforms, t)
 	return e
 }
 
@@ -94,6 +100,18 @@ func (e *Engine) run(ctx context.Context) error {
 
 			e.log.Debug("cdc-axon: event received", "id", ev.ID, "type", ev.EventType)
 
+			ev, keep, err := e.applyTransforms(ctx, ev)
+			if err != nil {
+				return fmt.Errorf("transform failed: %w", err)
+			}
+			if !keep {
+				e.log.Debug("cdc-axon: event dropped by transform", "id", ev.ID)
+				if err := e.source.Ack(ctx); err != nil {
+					return fmt.Errorf("ack failed: %w", err)
+				}
+				continue
+			}
+
 			if err := e.publishAll(ctx, producers, ev); err != nil {
 				return fmt.Errorf("publish failed: %w", err)
 			}
@@ -128,4 +146,19 @@ func (e *Engine) publishAll(ctx context.Context, producers []engine_source.Produ
 		}
 	}
 	return nil
+}
+
+func (e *Engine) applyTransforms(ctx context.Context, ev event.Event) (event.Event, bool, error) {
+	for _, t := range e.transforms {
+		var keep bool
+		var err error
+		ev, keep, err = t(ctx, ev)
+		if err != nil {
+			return ev, false, err
+		}
+		if !keep {
+			return ev, false, nil
+		}
+	}
+	return ev, true, nil
 }

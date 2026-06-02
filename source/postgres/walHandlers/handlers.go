@@ -87,30 +87,43 @@ func (wh *WalHandlers) handleXLogData(ctx context.Context, data []byte) (HandleR
 		}
 		wh.ClientLSN = lsn
 	case *pglogrepl.InsertMessage:
-		event, err := wh.buildEvent(m)
+		ev, err := wh.buildEventFromTuple(m.RelationID, m.Tuple, event.INSERT)
 		if err != nil {
 			return HandleResult{}, err
 		}
-		result.Event = event
+		result.Event = ev
 		wh.PendingLSN = lsn
-	case *pglogrepl.UpdateMessage, *pglogrepl.DeleteMessage,
-		*pglogrepl.BeginMessage, *pglogrepl.CommitMessage:
+	case *pglogrepl.UpdateMessage:
+		ev, err := wh.buildEventFromTuple(m.RelationID, m.NewTuple, event.UPDATE)
+		if err != nil {
+			return HandleResult{}, err
+		}
+		result.Event = ev
+		wh.PendingLSN = lsn
+	case *pglogrepl.DeleteMessage:
+		ev, err := wh.buildEventFromTuple(m.RelationID, m.OldTuple, event.DELETE)
+		if err != nil {
+			return HandleResult{}, err
+		}
+		result.Event = ev
+		wh.PendingLSN = lsn
+	case *pglogrepl.BeginMessage, *pglogrepl.CommitMessage:
 		wh.ClientLSN = lsn
 	}
 
 	return result, nil
 }
 
-func (wh *WalHandlers) buildEvent(msg *pglogrepl.InsertMessage) (event.Event, error) {
+func (wh *WalHandlers) buildEventFromTuple(relationID uint32, tuple *pglogrepl.TupleData, op event.OperationType) (event.Event, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	rel, ok := wh.relations[msg.RelationID]
+	rel, ok := wh.relations[relationID]
 	if !ok {
 		if wh.Persistor == nil {
 			return event.Event{}, errors.New("relation metadata missing")
 		}
-		data, err := wh.Persistor.Load(ctx, fmt.Sprintf("relation:%d", msg.RelationID))
+		data, err := wh.Persistor.Load(ctx, fmt.Sprintf("relation:%d", relationID))
 		if err != nil || len(data) == 0 {
 			return event.Event{}, errors.New("relation metadata missing")
 		}
@@ -118,15 +131,18 @@ func (wh *WalHandlers) buildEvent(msg *pglogrepl.InsertMessage) (event.Event, er
 		if err := json.Unmarshal(data, &loaded); err != nil {
 			return event.Event{}, err
 		}
-		wh.relations[msg.RelationID] = &loaded
+		wh.relations[relationID] = &loaded
 		rel = &loaded
 	}
 
+	if tuple == nil {
+		return event.Event{}, errors.New("tuple data is nil")
+	}
+
 	var id, eventType string
-	var operation event.OperationType
 	var payload []byte
 
-	for i, col := range msg.Tuple.Columns {
+	for i, col := range tuple.Columns {
 		name := rel.Columns[i].Name
 		switch name {
 		case "id":
@@ -135,16 +151,13 @@ func (wh *WalHandlers) buildEvent(msg *pglogrepl.InsertMessage) (event.Event, er
 			eventType = string(col.Data)
 		case "payload":
 			payload = col.Data
-		case "operation":
-			operation = event.OperationType(col.Data)
-
 		}
 	}
 
 	return event.Event{
 		ID:        id,
 		Source:    rel.RelationName,
-		Operation: operation,
+		Operation: op,
 		EventType: eventType,
 		Payload:   payload,
 	}, nil
