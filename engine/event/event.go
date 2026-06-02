@@ -14,6 +14,7 @@ type Event struct {
 	Operation OperationType
 	EventType string
 	Payload   json.RawMessage
+	Headers   map[string][]byte
 }
 
 type OperationType string
