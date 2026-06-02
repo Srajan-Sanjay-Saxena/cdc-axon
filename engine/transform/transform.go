@@ -45,25 +45,20 @@ func AddHeader(key string, value []byte) engine_source.Transform {
 	}
 }
 
-func Deduplicate(store engine_source.PersistenceStore, ttl time.Duration) engine_source.Transform {
+func Deduplicate(store engine_source.DeduplicationStore, ttl time.Duration) engine_source.Transform {
 	if store == nil {
-		panic("cdc-axon: Deduplicate requires a non-nil PersistenceStore")
+		panic("cdc-axon: Deduplicate requires a non-nil DeduplicationStore")
 	}
 	return func(ctx context.Context, e event.Event) (event.Event, bool, error) {
 		key := "dedup:" + e.ID
-		data, err := store.Load(ctx, key)
+		exists, err := store.Exists(ctx, key)
 		if err != nil {
 			return e, false, err
 		}
-		if data != nil {
-			ts := int64(binary.BigEndian.Uint64(data))
-			if time.Since(time.Unix(0, ts)) < ttl {
-				return e, false, nil
-			}
+		if exists {
+			return e, false, nil
 		}
-		now := make([]byte, 8)
-		binary.BigEndian.PutUint64(now, uint64(time.Now().UnixNano()))
-		if err := store.Save(ctx, key, now); err != nil {
+		if err := store.SaveWithTTL(ctx, key, []byte("1"), ttl); err != nil {
 			return e, false, err
 		}
 		return e, true, nil
