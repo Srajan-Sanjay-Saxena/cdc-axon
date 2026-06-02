@@ -29,3 +29,5 @@ type PersistenceStore interface {
 	Delete(ctx context.Context, key string) error
 }
 
+type Transform func(ctx context.Context, e event.Event) (event.Event, bool, error)
+
