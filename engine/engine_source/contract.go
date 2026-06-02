@@ -2,6 +2,7 @@ package engine_source
 
 import (
 	"context"
+	"time"
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 )
@@ -27,6 +28,11 @@ type PersistenceStore interface {
 	Save(ctx context.Context, key string, value []byte) error
 	Load(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
+}
+
+type DeduplicationStore interface {
+	SaveWithTTL(ctx context.Context, key string, value []byte, ttl time.Duration) error
+	Exists(ctx context.Context, key string) (bool, error)
 }
 
 type Transform func(ctx context.Context, e event.Event) (event.Event, bool, error)
