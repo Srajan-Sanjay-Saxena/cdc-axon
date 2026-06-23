@@ -10,6 +10,7 @@ import (
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/logger"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/metrics"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/snapshot"
 )
 
@@ -26,6 +27,7 @@ type Engine struct {
 	log         *logger.Logger
 	transforms  []engine_source.Transform
 	snapshotEng *snapshot.SnapshotEngine
+	metrics     metrics.Metrics
 }
 
 // New creates an Engine bound to the given source.
@@ -36,6 +38,12 @@ func New(src engine_source.EngineSource) *Engine {
 		backoff: backoff.New(1*time.Second, 60*time.Second, 5*time.Minute),
 		log:     logger.Default(),
 	}
+}
+
+// SetMetrics overrides the default no-op metrics collector.
+func (e *Engine) SetMetrics(m metrics.Metrics) *Engine {
+	e.metrics = m
+	return e
 }
 
 // SetLogger overrides the default logger.
@@ -73,6 +81,9 @@ func (e *Engine) Start(ctx context.Context) error {
 				return nil
 			}
 			e.log.Error("cdc-axon: run error", "error", err)
+			if e.metrics != nil {
+				e.metrics.RetryTriggered(ctx)
+			}
 			if err := e.backoff.Wait(ctx); err != nil {
 				e.log.Info("cdc-axon: shutting down")
 				return nil
@@ -224,6 +235,9 @@ func (e *Engine) streamEvents(ctx context.Context, producers []engine_source.Pro
 //   - false for snapshot events: no LSN to advance, cursor handles position internally
 func (e *Engine) processEvent(ctx context.Context, producers []engine_source.Producer, ev event.Event, ack bool) error {
 	e.log.Debug("cdc-axon: event received", "id", ev.ID, "type", ev.EventType)
+	if e.metrics != nil {
+		e.metrics.EventCaptured(ctx, ev.Source, string(ev.Operation))
+	}
 
 	ev, keep, err := e.applyTransforms(ctx, ev)
 	if err != nil {
@@ -231,6 +245,9 @@ func (e *Engine) processEvent(ctx context.Context, producers []engine_source.Pro
 	}
 	if !keep {
 		e.log.Debug("cdc-axon: event dropped by transform", "id", ev.ID)
+		if e.metrics != nil {
+			e.metrics.EventDropped(ctx, ev.Source, "transform")
+		}
 		if ack {
 			if err := e.source.Ack(ctx); err != nil {
 				return fmt.Errorf("ack failed: %w", err)
@@ -247,6 +264,9 @@ func (e *Engine) processEvent(ctx context.Context, producers []engine_source.Pro
 		if err := e.source.Ack(ctx); err != nil {
 			return fmt.Errorf("ack failed: %w", err)
 		}
+		if e.metrics != nil {
+			e.metrics.AckCompleted(ctx, ev.Source)
+		}
 		e.log.Debug("cdc-axon: event acked", "id", ev.ID)
 	}
 
@@ -261,26 +281,45 @@ func (e *Engine) processEvent(ctx context.Context, producers []engine_source.Pro
 // Uses buffered error channel + WaitGroup. No select needed because
 // N is deterministic (len(producers)) and each goroutine writes exactly once.
 func (e *Engine) publishAll(ctx context.Context, producers []engine_source.Producer, ev event.Event) error {
-	errCh := make(chan error, len(producers))
+	type result struct {
+		err      error
+		producer int
+		duration time.Duration
+	}
+
+	resCh := make(chan result, len(producers))
 
 	var wg sync.WaitGroup
-	for _, p := range producers {
+	for i, p := range producers {
 		wg.Add(1)
-		go func(prod engine_source.Producer) {
+		go func(prod engine_source.Producer, idx int) {
 			defer wg.Done()
-			errCh <- prod.Publish(ctx, ev)
-		}(p)
+			start := time.Now()
+			err := prod.Publish(ctx, ev)
+			resCh <- result{err: err, producer: idx, duration: time.Since(start)}
+		}(p, i)
 	}
 
 	wg.Wait()
-	close(errCh)
+	close(resCh)
 
-	for err := range errCh {
-		if err != nil {
-			return err
+	var firstErr error
+	for r := range resCh {
+		prodName := fmt.Sprintf("producer_%d", r.producer)
+		if r.err != nil {
+			if e.metrics != nil {
+				e.metrics.PublishFailed(ctx, prodName)
+			}
+			if firstErr == nil {
+				firstErr = r.err
+			}
+		} else {
+			if e.metrics != nil {
+				e.metrics.EventPublished(ctx, prodName, r.duration)
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // applyTransforms runs the event through the transform chain sequentially.

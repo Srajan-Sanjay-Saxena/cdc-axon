@@ -5,6 +5,7 @@ import (
 
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/logger"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/metrics"
 )
 
 type SnapshotEngine struct {
@@ -14,6 +15,7 @@ type SnapshotEngine struct {
 	mode       Mode
 	source     SnapshotSource
 	log        *logger.Logger
+	metrics    metrics.Metrics
 }
 
 func NewEngine(source SnapshotSource, mode Mode) *SnapshotEngine {
@@ -23,6 +25,11 @@ func NewEngine(source SnapshotSource, mode Mode) *SnapshotEngine {
 		source:    source,
 		log:       logger.Default(),
 	}
+}
+
+func (e *SnapshotEngine) SetMetrics(m metrics.Metrics) *SnapshotEngine {
+	e.metrics = m
+	return e
 }
 
 func (e *SnapshotEngine) Table(table string) *SnapshotEngine {
@@ -52,11 +59,30 @@ func (e *SnapshotEngine) SyncSnapshot(ctx context.Context, ch chan<- event.Event
 
 	e.log.Info("snapshot: starting", "table", e.table, "batch_size", e.batchSize, "mode", e.mode)
 
-	err := e.source.SyncSnapshot(ctx, e.table, e.primaryKey, e.batchSize, e.mode, ch)
+	// wrap channel to track progress
+	tracked := make(chan event.Event)
+	var rowsProcessed int64
+
+	go func() {
+		for ev := range tracked {
+			rowsProcessed++
+			if e.metrics != nil && rowsProcessed%int64(e.batchSize) == 0 {
+				e.metrics.SnapshotProgress(ctx, e.table, rowsProcessed)
+			}
+			ch <- ev
+		}
+	}()
+
+	err := e.source.SyncSnapshot(ctx, e.table, e.primaryKey, e.batchSize, e.mode, tracked)
+	close(tracked)
+
 	if err != nil {
 		return err
 	}
 
-	e.log.Info("snapshot: complete", "table", e.table)
+	if e.metrics != nil {
+		e.metrics.SnapshotProgress(ctx, e.table, rowsProcessed)
+	}
+	e.log.Info("snapshot: complete", "table", e.table, "rows", rowsProcessed)
 	return nil
 }
