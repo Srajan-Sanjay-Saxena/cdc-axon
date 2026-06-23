@@ -32,6 +32,7 @@ No polling. No triggers. No expensive enterprise tooling.
 - **Concurrent publish** — all producers publish in parallel via goroutines with buffered error channel
 - **Pluggable producer** — implement `Producer` interface for any message broker (RabbitMQ, Kafka, SQS, etc.)
 - **Pluggable persistence** — implement `PersistenceStore` interface for any backend (Redis, in-memory, etc.)
+- **Pluggable metrics** — implement `Metrics` interface for any observability stack (Prometheus, Datadog, CloudWatch, etc.)
 - **Exponential backoff** — automatic retry with configurable backoff on failures
 - **Clean interfaces** — engine, source, producer, and persistence are fully decoupled
 
@@ -273,6 +274,238 @@ type Event struct {
 ```
 
 This means your `Producer` implementation receives the same `Event` shape whether the source is Postgres or MongoDB — making it trivial to build broker-agnostic consumers.
+
+---
+
+## Observability
+
+CDC-Axon provides a pluggable `Metrics` interface for real-time observability. Implement it for any backend — Prometheus, Datadog, CloudWatch, or all of them at once.
+
+### Metrics Interface
+
+```go
+type Metrics interface {
+    EventCaptured(ctx context.Context, source string, operation string)
+    EventDropped(ctx context.Context, source string, reason string)
+    EventPublished(ctx context.Context, producer string, duration time.Duration)
+    PublishFailed(ctx context.Context, producer string)
+    AckCompleted(ctx context.Context, source string)
+    RetryTriggered(ctx context.Context)
+    SnapshotProgress(ctx context.Context, table string, rowsProcessed int64)
+}
+```
+
+If you don't call `SetMetrics`, the engine runs with zero overhead — no metrics are collected.
+
+### Prometheus Example
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+    "time"
+
+    "github.com/prometheus/client_golang/prometheus"
+    "github.com/prometheus/client_golang/prometheus/promhttp"
+
+    "github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/core"
+    "github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/metrics"
+    pgConfig "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
+    pgSource "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/source"
+)
+
+// PrometheusMetrics implements metrics.Metrics for Prometheus.
+type PrometheusMetrics struct {
+    eventsCaptured  *prometheus.CounterVec
+    eventsDropped   *prometheus.CounterVec
+    eventsPublished *prometheus.CounterVec
+    publishFailed   *prometheus.CounterVec
+    publishDuration *prometheus.HistogramVec
+    acksCompleted   *prometheus.CounterVec
+    retries         prometheus.Counter
+    snapshotRows    *prometheus.GaugeVec
+}
+
+func NewPrometheusMetrics() *PrometheusMetrics {
+    m := &PrometheusMetrics{
+        eventsCaptured: prometheus.NewCounterVec(prometheus.CounterOpts{
+            Name: "cdc_axon_events_captured_total",
+            Help: "Total events captured from source",
+        }, []string{"source", "operation"}),
+
+        eventsDropped: prometheus.NewCounterVec(prometheus.CounterOpts{
+            Name: "cdc_axon_events_dropped_total",
+            Help: "Total events dropped by transforms",
+        }, []string{"source", "reason"}),
+
+        eventsPublished: prometheus.NewCounterVec(prometheus.CounterOpts{
+            Name: "cdc_axon_events_published_total",
+            Help: "Total events successfully published",
+        }, []string{"producer"}),
+
+        publishFailed: prometheus.NewCounterVec(prometheus.CounterOpts{
+            Name: "cdc_axon_publish_errors_total",
+            Help: "Total publish failures",
+        }, []string{"producer"}),
+
+        publishDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+            Name:    "cdc_axon_publish_duration_seconds",
+            Help:    "Publish latency distribution",
+            Buckets: []float64{0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1},
+        }, []string{"producer"}),
+
+        acksCompleted: prometheus.NewCounterVec(prometheus.CounterOpts{
+            Name: "cdc_axon_acks_total",
+            Help: "Total successful acks to source",
+        }, []string{"source"}),
+
+        retries: prometheus.NewCounter(prometheus.CounterOpts{
+            Name: "cdc_axon_retries_total",
+            Help: "Total engine retries triggered",
+        }),
+
+        snapshotRows: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+            Name: "cdc_axon_snapshot_rows_processed",
+            Help: "Snapshot progress by table",
+        }, []string{"table"}),
+    }
+
+    prometheus.MustRegister(
+        m.eventsCaptured, m.eventsDropped, m.eventsPublished,
+        m.publishFailed, m.publishDuration, m.acksCompleted,
+        m.retries, m.snapshotRows,
+    )
+    return m
+}
+
+func (m *PrometheusMetrics) EventCaptured(_ context.Context, source, operation string) {
+    m.eventsCaptured.WithLabelValues(source, operation).Inc()
+}
+func (m *PrometheusMetrics) EventDropped(_ context.Context, source, reason string) {
+    m.eventsDropped.WithLabelValues(source, reason).Inc()
+}
+func (m *PrometheusMetrics) EventPublished(_ context.Context, producer string, duration time.Duration) {
+    m.eventsPublished.WithLabelValues(producer).Inc()
+    m.publishDuration.WithLabelValues(producer).Observe(duration.Seconds())
+}
+func (m *PrometheusMetrics) PublishFailed(_ context.Context, producer string) {
+    m.publishFailed.WithLabelValues(producer).Inc()
+}
+func (m *PrometheusMetrics) AckCompleted(_ context.Context, source string) {
+    m.acksCompleted.WithLabelValues(source).Inc()
+}
+func (m *PrometheusMetrics) RetryTriggered(_ context.Context) {
+    m.retries.Inc()
+}
+func (m *PrometheusMetrics) SnapshotProgress(_ context.Context, table string, rows int64) {
+    m.snapshotRows.WithLabelValues(table).Set(float64(rows))
+}
+
+var _ metrics.Metrics = (*PrometheusMetrics)(nil)
+
+func main() {
+    ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+    defer cancel()
+
+    // expose /metrics for Prometheus to scrape
+    go func() {
+        http.Handle("/metrics", promhttp.Handler())
+        http.ListenAndServe(":9090", nil)
+    }()
+
+    src := pgSource.NewSource(&pgConfig.PgRelaySourceConfig{
+        URL:             "postgresql://user:pass@localhost:5432/mydb",
+        SlotName:        "myslot",
+        PublicationName: "mypub",
+    }).AddProducer(myRabbitMQProducer)
+
+    core.New(src).
+        SetMetrics(NewPrometheusMetrics()).
+        Start(ctx)
+}
+```
+
+Prometheus scrapes `:9090/metrics` and you get:
+```
+cdc_axon_events_captured_total{source="outbox", operation="insert"}     48721
+cdc_axon_publish_duration_seconds{producer="producer_0", quantile="0.99"}  0.011
+cdc_axon_retries_total                                                  0
+```
+
+### Structured Logging with Loki
+
+CDC-Axon uses Go's `log/slog` for structured logging. To ship logs to Loki (for Grafana), configure a JSON logger and let Promtail/Grafana Agent collect from stdout:
+
+```go
+package main
+
+import (
+    "github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/core"
+    "github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/logger"
+    pgSource "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/source"
+)
+
+func main() {
+    // Production mode = JSON output, WARN level and above
+    // Promtail/Grafana Agent tails stdout → ships to Loki → queryable in Grafana
+    log := logger.New(logger.Production)
+
+    src := pgSource.NewSource(cfg).AddProducer(myProducer)
+
+    core.New(src).
+        SetLogger(log).
+        SetMetrics(NewPrometheusMetrics()).
+        Start(ctx)
+}
+```
+
+Production JSON output (what Loki ingests):
+```json
+{"time":"2025-01-15T03:17:42Z","level":"ERROR","msg":"cdc-axon: run error","error":"publish failed: connection refused"}
+{"time":"2025-01-15T03:17:43Z","level":"WARN","msg":"postgres source: slot still active, retrying","attempt":3}
+```
+
+Query in Grafana Loki:
+```
+{job="cdc-axon"} |= "publish failed"
+{job="cdc-axon"} | json | level="ERROR"
+```
+
+### Metrics + Logs Together
+
+| What you need | Where to look |
+|---|---|
+| "Is the pipeline flowing?" | Prometheus → `cdc_axon_events_captured_total` rate |
+| "What's the p99 latency?" | Prometheus → `cdc_axon_publish_duration_seconds` |
+| "Why did event X fail?" | Loki → `{job="cdc-axon"} \|= "evt-X"` |
+| "How many retries today?" | Prometheus → `cdc_axon_retries_total` |
+| "What error caused the retry?" | Loki → `{job="cdc-axon"} \| json \| level="ERROR"` |
+
+### Multiple Backends (Composite Metrics)
+
+```go
+// Send metrics to Prometheus AND Datadog simultaneously.
+type CompositeMetrics struct {
+    backends []metrics.Metrics
+}
+
+func (c *CompositeMetrics) EventCaptured(ctx context.Context, source, op string) {
+    for _, b := range c.backends {
+        b.EventCaptured(ctx, source, op)
+    }
+}
+// ... same pattern for all other methods
+
+// Usage:
+core.New(src).
+    SetMetrics(&CompositeMetrics{backends: []metrics.Metrics{
+        NewPrometheusMetrics(),
+        NewDatadogMetrics(),
+    }}).
+    Start(ctx)
+```
 
 
 
