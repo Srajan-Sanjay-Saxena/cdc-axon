@@ -20,6 +20,9 @@ func (r *PgRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, 
 		for {
 			recvCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			msg, err := r.pgConn.ReceiveMessage(recvCtx)
+
+			// Every context.WithTimeout allocates an internal timer. If ReceiveMessage returns before the 10-second timeout (which it will most of the time — WAL messages arrive in milliseconds), that timer is still running in the background until it expires. cancel stops that timer immmediately, preventing a memory leak. See https://golang.org/pkg/context/#WithTimeout for more details.
+			
 			cancel()
 
 			if err != nil {
