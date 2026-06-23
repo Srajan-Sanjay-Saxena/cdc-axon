@@ -11,6 +11,7 @@ import (
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/core"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/engine_source"
 	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/event"
+	"github.com/Srajan-Sanjay-Saxena/cdc-axon/engine/metrics"
 	mongoConfig "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/config"
 	mongoSource "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/mongo/source"
 	pgConfig "github.com/Srajan-Sanjay-Saxena/cdc-axon/source/postgres/config"
@@ -169,8 +170,11 @@ func TestEngine_PgAndMongo_Simultaneous(t *testing.T) {
 	engineCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 
-	go core.New(pgSrc).Start(engineCtx)
-	go core.New(mongoSrc).Start(engineCtx)
+	pgMetrics := &recordingMetrics{}
+	mongoMetrics := &recordingMetrics{}
+
+	go core.New(pgSrc).SetMetrics(pgMetrics).Start(engineCtx)
+	go core.New(mongoSrc).SetMetrics(mongoMetrics).Start(engineCtx)
 	time.Sleep(3 * time.Second)
 
 	// insert into postgres outbox
@@ -271,6 +275,33 @@ func TestEngine_PgAndMongo_Simultaneous(t *testing.T) {
 		t.Error("expected mongo resume token in Redis")
 	}
 	t.Logf("mongo resume token in Redis: %d bytes", len(mongoToken))
+
+	// verify metrics were recorded for both engines
+	pgMetrics.mu.Lock()
+	if pgMetrics.captured < 1 {
+		t.Error("expected pg metrics: at least 1 EventCaptured")
+	}
+	if pgMetrics.published < 1 {
+		t.Error("expected pg metrics: at least 1 EventPublished")
+	}
+	if pgMetrics.acks < 1 {
+		t.Error("expected pg metrics: at least 1 AckCompleted")
+	}
+	t.Logf("pg metrics: captured=%d published=%d acks=%d", pgMetrics.captured, pgMetrics.published, pgMetrics.acks)
+	pgMetrics.mu.Unlock()
+
+	mongoMetrics.mu.Lock()
+	if mongoMetrics.captured < 1 {
+		t.Error("expected mongo metrics: at least 1 EventCaptured")
+	}
+	if mongoMetrics.published < 1 {
+		t.Error("expected mongo metrics: at least 1 EventPublished")
+	}
+	if mongoMetrics.acks < 1 {
+		t.Error("expected mongo metrics: at least 1 AckCompleted")
+	}
+	t.Logf("mongo metrics: captured=%d published=%d acks=%d", mongoMetrics.captured, mongoMetrics.published, mongoMetrics.acks)
+	mongoMetrics.mu.Unlock()
 }
 
 // rabbitProducer — real RabbitMQ producer with configurable queue
@@ -355,3 +386,43 @@ func (r *redisStore) Keys(ctx context.Context, pattern string) ([]string, error)
 }
 
 var _ engine_source.PersistenceStore = (*redisStore)(nil)
+
+// recordingMetrics records all metrics calls for integration test assertions.
+type recordingMetrics struct {
+	mu            sync.Mutex
+	captured      int
+	published     int
+	publishFailed int
+	acks          int
+	retries       int
+}
+
+func (r *recordingMetrics) EventCaptured(_ context.Context, _ string, _ string) {
+	r.mu.Lock()
+	r.captured++
+	r.mu.Unlock()
+}
+func (r *recordingMetrics) EventDropped(_ context.Context, _ string, _ string) {}
+func (r *recordingMetrics) EventPublished(_ context.Context, _ string, _ time.Duration) {
+	r.mu.Lock()
+	r.published++
+	r.mu.Unlock()
+}
+func (r *recordingMetrics) PublishFailed(_ context.Context, _ string) {
+	r.mu.Lock()
+	r.publishFailed++
+	r.mu.Unlock()
+}
+func (r *recordingMetrics) AckCompleted(_ context.Context, _ string) {
+	r.mu.Lock()
+	r.acks++
+	r.mu.Unlock()
+}
+func (r *recordingMetrics) RetryTriggered(_ context.Context) {
+	r.mu.Lock()
+	r.retries++
+	r.mu.Unlock()
+}
+func (r *recordingMetrics) SnapshotProgress(_ context.Context, _ string, _ int64) {}
+
+var _ metrics.Metrics = (*recordingMetrics)(nil)
