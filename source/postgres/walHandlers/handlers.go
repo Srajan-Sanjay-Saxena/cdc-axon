@@ -33,6 +33,11 @@ func NewWalHandlers() *WalHandlers {
 }
 
 
+// HandleMessage processes a raw message from the Postgres replication stream.
+// Replication data = WAL changes (INSERT/UPDATE/DELETE) + server keepalives.
+// All of it arrives wrapped in CopyData envelopes — this extracts the payload
+// and routes it by type. Non-CopyData messages are ignored.
+
 func (wh *WalHandlers) HandleMessage(ctx context.Context, msg pgproto3.BackendMessage) (HandleResult, error) {
 	if m, ok := msg.(*pgproto3.CopyData); ok {
 		return wh.handleCopyData(ctx, m.Data)
@@ -40,6 +45,17 @@ func (wh *WalHandlers) HandleMessage(ctx context.Context, msg pgproto3.BackendMe
 	return HandleResult{}, nil
 }
 
+// handleCopyData demultiplexes the raw CopyData payload by its first byte.
+//
+// Inside a CopyData message, the first byte is a sub-type identifier:
+//   - 'k' (PrimaryKeepaliveMessageByteID): Postgres heartbeat. Sent every
+//     wal_sender_timeout/2 (~30s default). Contains server's current WAL
+//     position and a ReplyRequested flag. If we don't reply in time,
+//     Postgres kills the replication connection.
+//   - 'w' (XLogDataByteID): Actual WAL data. Contains the LSN and the
+//     logical replication message (RelationMessage, InsertMessage, etc.)
+//
+// The remaining bytes (data[1:]) are the message payload without the type byte.
 func (wh *WalHandlers) handleCopyData(ctx context.Context, data []byte) (HandleResult, error) {
 	switch data[0] {
 	case pglogrepl.PrimaryKeepaliveMessageByteID:
@@ -76,6 +92,13 @@ func (wh *WalHandlers) handleXLogData(ctx context.Context, data []byte) (HandleR
 	lsn := xld.WALStart + pglogrepl.LSN(len(xld.WALData))
 
 	switch m := logicalMsg.(type) {
+		
+	// RelationMessage is table metadata (column names, types, relation ID).
+	// Postgres sends it ONCE per table — before the first DML event for that table
+	// in the current replication session. Without it, we can't decode tuple data
+	// (we wouldn't know which column is "id", "event_type", or "payload").
+	// We cache it in memory and persist to store for crash recovery.
+
 	case *pglogrepl.RelationMessage:
 		wh.relations[m.RelationID] = m
 		data, err := json.Marshal(m)
@@ -143,6 +166,9 @@ func (wh *WalHandlers) buildEventFromTuple(relationID uint32, tuple *pglogrepl.T
 	var payload []byte
 
 	for i, col := range tuple.Columns {
+		if col.DataType == 'n' || col.DataType == 'u' {
+			continue
+		}
 		name := rel.Columns[i].Name
 		switch name {
 		case "id":
