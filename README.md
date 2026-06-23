@@ -42,7 +42,7 @@ No polling. No triggers. No expensive enterprise tooling.
 ## Installation
 
 ```bash
-go get github.com/Srajan-Sanjay-Saxena/cdc-axon@v1.1.0
+go get github.com/Srajan-Sanjay-Saxena/cdc-axon@v1.6.0
 ```
 
 ---
