@@ -127,8 +127,8 @@ func (e *Engine) run(ctx context.Context) error {
 // connectProducers connects all producers concurrently using goroutines.
 // Each producer connects independently in its own goroutine.
 // If any producer fails to connect, returns the first error encountered.
-// Uses a buffered error channel sized to len(producers) — guaranteed N writes,
-// so no select with ctx.Done() needed (always drains).
+// Respects context cancellation — if ctx is cancelled (shutdown), returns immediately.
+// On any failure, all successfully connected producers are closed to prevent leaks.
 func (e *Engine) connectProducers(ctx context.Context) ([]engine_source.Producer, error) {
 	producers, err := e.source.GetProducers()
 	if err != nil {
@@ -136,16 +136,53 @@ func (e *Engine) connectProducers(ctx context.Context) ([]engine_source.Producer
 	}
 
 	e.log.Debug("cdc-axon: connecting producers", "count", len(producers))
+
+	// Buffered channel sized to len(producers) — each goroutine writes exactly once,
+	// so writes never block even if we exit early due to context cancellation.
 	errCh := make(chan error, len(producers))
-	for _, p := range producers {
+
+	// Spawn one goroutine per producer — all connect attempts run in parallel.
+	// The closure captures `prod` by parameter (not loop variable) to avoid race.
+	for _, prod := range producers {
 		go func(prod engine_source.Producer) {
 			errCh <- prod.Connect(ctx)
-		}(p)
+		}(prod)
 	}
-	for range producers {
-		if err := <-errCh; err != nil {
-			return nil, fmt.Errorf("producer connect: %w", err)
+
+	// Collect results from all goroutines. We need to read exactly len(producers)
+	// values from errCh, but we also need to respect context cancellation.
+	//
+	// Why select with ctx.Done()?
+	//   If a producer's Connect hangs (unresponsive broker, network timeout),
+	//   we'd block forever without this. Context cancellation lets us bail out
+	//   on shutdown signals instead of waiting indefinitely.
+	//
+	// Why track firstErr instead of returning immediately?
+	//   If we return on first error, other goroutines are still running.
+	//   We wait for all to finish (or ctx cancel) so we know the full state
+	//   before cleanup. Also, some producers may have connected successfully —
+	//   we need to close them to prevent resource leaks.
+	var firstErr error
+	for i := 0; i < len(producers); i++ {
+		select {
+		case err := <-errCh:
+			if err != nil && firstErr == nil {
+				firstErr = err
+			}
+		case <-ctx.Done():
+			// Shutdown requested — close any producers that may have connected
+			// and return immediately. Goroutines still in-flight will eventually
+			// write to errCh (buffered, won't block) and exit.
+			e.closeProducers(producers)
+			return nil, ctx.Err()
 		}
+	}
+
+	// If any producer failed, close all (including successful ones) and return error.
+	// This prevents leaking connections from producers that did connect.
+	if firstErr != nil {
+		e.closeProducers(producers)
+		return nil, fmt.Errorf("producer connect: %w", firstErr)
 	}
 
 	return producers, nil
