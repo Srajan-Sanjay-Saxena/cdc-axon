@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// The main entry point for each driver in our cdc , which use to capture the events from wal/opolog from db . In pg case these are wal logs.
 func (r *PgRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, error) {
 	if err := r.walHandler.SendStatus(ctx, r.pgConn); err != nil {
 		return nil, err
@@ -27,6 +28,38 @@ func (r *PgRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, 
 
 			if err != nil {
 				if pgconn.Timeout(err) {
+					
+					// Someone might ask that why even on not recieving the message we are sending the status to the server.
+
+					/*
+						WAL storage: Postgres writes WAL for everything — every INSERT, UPDATE, DELETE on every table in the entire database. This is how Postgres works internally for crash recovery, regardless of replication.
+
+						WAL streaming: The replication slot + publication filters what gets sent to you.
+
+						All tables in database
+							↓
+						WAL (stores everything — users, orders, payments, outbox, etc.)
+							↓
+						Replication slot (holds WAL back until consumer acks)
+							↓
+						pgoutput + Publication filter (only outbox table)
+							↓
+						CDC-Axon receives only outbox events
+
+						What the Publication Does
+						CREATE PUBLICATION mypub FOR TABLE outbox;
+						This doesn't affect what Postgres stores in WAL. It affects what pgoutput decodes and sends to you.
+
+						WAL contains:
+						- INSERT into users (id=1)      ← stored, NOT sent to you
+						- UPDATE orders SET status=...  ← stored, NOT sent to you
+						- INSERT into outbox (evt-1)    ← stored, SENT to you
+						- DELETE from logs WHERE...     ← stored, NOT sent to you
+
+						So in this case if we donot send the status back to the server then wal data will pile up and will start choking the disk of pg server .
+						But one question arrives that since we are not getting any message for long time (say) then how our lsn is moving forward , who is updating the clientLSN . The answer is that even if we are not getting any wal logs data , still pg sends the heartbeat message , and that's where we advances our clientLSN .
+					*/
+
 					r.walHandler.SendStatus(ctx, r.pgConn)
 					continue
 				}
@@ -56,6 +89,27 @@ func (r *PgRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Event, 
 	return ch, nil
 }
 
+// Ack advances the confirmed LSN position after successful publish to all producers.
+//
+// Flow:
+//   1. Event received from WAL → PendingLSN set to event's LSN
+//   2. Event published to all producers successfully
+//   3. Ack() called → ClientLSN = PendingLSN → SendStatus to Postgres
+//   4. Postgres knows we've processed up to this LSN → can clean up WAL
+//
+// Why two LSNs (ClientLSN vs PendingLSN)?
+//   - PendingLSN: "I received this event, haven't published yet"
+//   - ClientLSN: "I successfully published, safe to advance"
+//
+// If publish fails:
+//   - Ack() is NOT called
+//   - ClientLSN stays at old position
+//   - On restart, Postgres resends from ClientLSN → at-least-once delivery
+//
+// If publish succeeds but Ack() fails (connection dead):
+//   - Engine detects error, retries
+//   - On reconnect, Postgres resends the event (LSN wasn't advanced)
+//   - Event gets published again → at-least-once (not exactly-once)
 func (r *PgRelaySource) Ack(ctx context.Context) error {
 	r.walHandler.ClientLSN = r.walHandler.PendingLSN
 	return r.walHandler.SendStatus(ctx, r.pgConn)

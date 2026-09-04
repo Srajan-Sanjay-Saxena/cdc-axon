@@ -18,6 +18,9 @@ func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Even
 		}
 	}
 
+	/*
+		Open the change stream. If resumeToken is nil, Mongo opens it from now — meaning it will only see events that happen after this moment. Any events that occurred while CDC-Axon was down are gone.
+	*/
 	cs, err := stream.Open(ctx, s.collection, resumeToken)
 	if err != nil {
 		return nil, err
@@ -30,6 +33,7 @@ func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Even
 		defer close(ch)
 		defer cs.Close(ctx)
 
+		// blocking loop that waits for change events from Mongo and pushes them to the channel.
 		for cs.Next(ctx) {
 			var raw stream.ChangeEvent
 			if err := cs.Decode(&raw); err != nil {
@@ -56,6 +60,7 @@ func (s *MongoRelaySource) CaptureEvents(ctx context.Context) (<-chan event.Even
 	return ch, nil
 }
 
+// will be used by our engine to save the resume token . In mongo there is no concept of SendStatus , but as we know the stream starts from the resume token that we save .
 func (s *MongoRelaySource) Ack(ctx context.Context) error {
 	if s.store == nil || s.cs == nil {
 		return nil

@@ -9,7 +9,32 @@ import (
 	"go.mongodb.org/mongo-driver/mongo"
 )
 
+// The resume token is Mongo's equivalent of LSN. It's an opaque BSON token that points to a position in the oplog. On restart, you pass it back to Mongo and it resumes from exactly that point.
+
+// key for redis to store the token
 const resumeTokenKey = "mongo:resume_token"
+
+/*
+	MongoDB — Oplog + Change Streams
+	Mongo has its own equivalent called the oplog (operations log). It's a capped collection that lives in the local database:
+
+	db.local.oplog.rs
+
+	Copy
+	Every write to any collection gets appended here automatically (on replica sets). Just like WAL, it exists primarily for replication between primary and secondaries.
+
+	INSERT into outbox
+		↓
+	Mongo writes to oplog (on replica sets, always)
+		↓
+	Change Stream tails the oplog
+		↓
+	Filters by your collection + operation type
+		↓
+	CDC-Axon reads decoded change events
+		↓
+	Ack → saves resume token to Redis
+*/
 
 type MongoRelaySource struct {
 	cfg         *config.MongoRelaySourceConfig

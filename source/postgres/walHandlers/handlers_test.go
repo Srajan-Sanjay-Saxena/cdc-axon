@@ -14,6 +14,7 @@ func TestHandleMessage_NonCopyData(t *testing.T) {
 	wh := NewWalHandlers()
 
 	msg := &pgproto3.NoticeResponse{}
+	// Messages other than the CopyData type should be ignored and not cause any errors.
 	result, err := wh.HandleMessage(context.Background(), msg)
 
 	if err != nil {
@@ -32,10 +33,20 @@ func TestHandleKeepalive_AdvancesLSN(t *testing.T) {
 	wh.ClientLSN = 100
 
 	data := make([]byte, 17)
+	/*
+		This is what in actual setup the stripped datat that our handleKeepalive function recieve
+		binary.BigEndian.PutUint64(data[0:8], 200)  // ServerWALEnd
+		binary.BigEndian.PutUint64(data[8:16], 0)   // SendTime
+		data[16] = 1                                 // ReplyRequested
+	
+	*/
+
+	// So binary.BigEndian.PutUint64(data[0:8], 200) is just writing the number 200 as 8 bytes into positions 0-7 of the slice:
 	binary.BigEndian.PutUint64(data[0:8], 200)
 	binary.BigEndian.PutUint64(data[8:16], 0)
 	data[16] = 1
 
+	// After the keepalive message , the client LSN should advance to 200, and since ReplyRequested=1, the result should indicate that a reply is needed.
 	result, err := wh.handleKeepalive(data)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -50,6 +61,7 @@ func TestHandleKeepalive_AdvancesLSN(t *testing.T) {
 }
 
 func TestHandleKeepalive_DoesNotRegressLSN(t *testing.T) {
+	// The case where pg server lsn , is behind the client lsn . So in this case the client lsn should not regress.
 	wh := NewWalHandlers()
 	wh.ClientLSN = 500
 
@@ -74,6 +86,8 @@ func TestHandleKeepalive_NoReplyWhenNotRequested(t *testing.T) {
 	data := make([]byte, 17)
 	binary.BigEndian.PutUint64(data[0:8], 100)
 	binary.BigEndian.PutUint64(data[8:16], 0)
+	
+	// Reply requested = false (last bit represent this)
 	data[16] = 0
 
 	result, err := wh.handleKeepalive(data)
@@ -90,6 +104,8 @@ func TestBuildEventFromTuple_MissingRelation(t *testing.T) {
 	wh := NewWalHandlers()
 
 	tuple := &pglogrepl.TupleData{}
+
+	// Just giving a fake relationId to check whether our function is properly throwing error or not.
 	_, err := wh.buildEventFromTuple(999, tuple, event.INSERT)
 	if err == nil {
 		t.Error("expected error for missing relation")
@@ -115,6 +131,7 @@ func TestBuildEventFromTuple_NilTuple(t *testing.T) {
 func TestBuildEventFromTuple_Insert(t *testing.T) {
 	wh := NewWalHandlers()
 
+	// This is the kind of metadata send by the PG server when either schema changes or the first time a table is being replicated. So we are mocking this data to test our function.
 	wh.relations[1] = &pglogrepl.RelationMessage{
 		RelationID:   1,
 		RelationName: "outbox",

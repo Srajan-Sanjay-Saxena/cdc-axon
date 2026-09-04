@@ -15,12 +15,59 @@ import (
 // from the given table using keyset pagination, and pushes each row
 // as an event into the channel.
 //
-// Mode handling:
-//   - Always + persistor: resumes from last saved cursor position. After all rows, resets cursor.
-//   - Always + no persistor: starts from beginning every time (no way to save position).
-//   - Initial + persistor (required): checks "snapshot:done" marker. If exists, skips.
-//     Otherwise resumes from last cursor, and saves "snapshot:done" after completion.
-//   - Initial + no persistor: returns error (Initial mode requires PersistenceStore).
+// Why snapshot exists:
+// When you first deploy CDC-Axon, the outbox table might already have existing rows.
+// WAL only captures NEW changes going forward. Snapshot backfills the historical data.
+//
+// Modes:
+//
+//   Initial = "Run snapshot ONCE ever, then never again."
+//
+//     Day 1: Deploy CDC-Axon
+//         → Outbox has 100,000 existing rows
+//         → Snapshot runs → reads all 100,000 → publishes to broker
+//         → Saves "snapshot:done:outbox" in Redis
+//         → WAL streaming starts
+//
+//     Day 2: CDC-Axon restarts
+//         → Checks Redis: "snapshot:done:outbox" exists? YES
+//         → Skip snapshot entirely
+//         → WAL streaming starts immediately
+//
+//     Use case: Production. Backfill historical data once, then WAL handles everything.
+//
+//   Always = "Run snapshot EVERY single startup."
+//
+//     Day 1: Deploy CDC-Axon
+//         → Snapshot runs → reads all rows → publishes
+//         → Does NOT save "snapshot:done" marker
+//         → WAL streaming starts
+//
+//     Day 2: CDC-Axon restarts
+//         → Snapshot runs AGAIN → reads all rows again → publishes again
+//         → WAL streaming starts
+//
+//     Use case: Testing, dev environment, or intentional full re-sync every time.
+//
+// Cursor (crash recovery, both modes):
+// The cursor ("snapshot:cursor:outbox") is for crash recovery MID-snapshot.
+//
+//     Snapshot running, processed 50,000 of 100,000 rows
+//         → Crash
+//         → Cursor saved: "evt-50000"
+//         → Restart
+//         → Load cursor → resume from row 50,001
+//         → Finish remaining 50,000
+//         → Delete cursor
+//
+// Both Initial and Always use cursor for crash recovery. The difference is
+// what happens AFTER snapshot completes:
+//   - Initial: saves "done" marker → next startup skips snapshot
+//   - Always: no "done" marker → next startup runs snapshot again
+//
+// Persistence requirements:
+//   - Initial + no persistor: returns error (must track "done" state)
+//   - Always + no persistor: works, but no crash recovery (restarts from beginning)
 func (s *PgRelaySource) SyncSnapshot(ctx context.Context, table string, primaryKey string, batchSize int, mode snapshot.Mode, ch chan<- event.Event) error {
 	// Initial mode requires a persistence store to track completion
 	if mode == snapshot.Initial && s.walHandler.Persistor == nil {
